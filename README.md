@@ -12,3 +12,7 @@ Set envs into file: `.env`.
 `npm ci`
 
 `npm run start`
+
+# Other
+
+`npm run start > logs.out 2> errors.err < /dev/null &`

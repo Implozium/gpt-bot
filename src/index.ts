@@ -5,6 +5,8 @@ const apiKey = process.env['API_KEY'];
 const botToken = process.env['BOT_TOKEN'];
 const folderId = process.env['FOLDER_ID'];
 
+const TG_URL = 'https://api.telegram.org';
+
 if (!apiKey || !botToken || !folderId) {
     process.exit(1);
 }
@@ -129,7 +131,7 @@ type TelegramBotUpdate = {
     inline_query?: {
         id: string;
         from: {
-            id: string;
+            id: number;
             is_bot: boolean;
             username?: string;
         };
@@ -153,8 +155,6 @@ type TelegramBotInlineAnswer = {
     cache_time: number;
     is_personal: boolean;
 };
-
-const TG_URL = 'https://api.telegram.org';
 
 class TelegramBot {
     private token: string;
@@ -218,6 +218,10 @@ class TelegramBot {
             .then((response) => {
                 const nextOffset = onRequest(response);
                 this.listen(url, nextOffset, allowedUpdates, onRequest);
+            })
+            .catch((error) => {
+                console.error('Failed to request telegram', error);
+                this.listen(url, undefined, allowedUpdates, onRequest);
             });
     }
 
@@ -236,25 +240,49 @@ class TelegramBot {
 
 const tgbot = new TelegramBot(botToken);
 
+const requestMap: Map<number, Promise<string>> = new Map();
+const callbackMap: Map<number, (portent: string) => void> = new Map();
+
 tgbot.onUpdate(async (update) => {
     if (!update.inline_query?.from.username) {
         return;
     }
-    const portent = await fetchPortent();
-    tgbot.answerInlineQuery({
-        inline_query_id: update.inline_query!.id,
-        results: [{
-            type: 'article',
-            id: '0',
-            caption: 'Предсказание',
-            title: 'Узнай судьбу на день',
-            input_message_content: {
-                message_text: `Предсказание для @${update.inline_query.from.username}:\n\n${portent}`,
-            },
-        }],
-        cache_time: 300,
-        is_personal: true,
+    console.log(`Update`, update.inline_query);
+    const from = update.inline_query.from;
+    callbackMap.set(from.id, (portent: string) => {
+        tgbot.answerInlineQuery({
+            inline_query_id: update.inline_query!.id,
+            results: [{
+                type: 'article',
+                id: '0',
+                caption: 'Предсказание',
+                title: 'Узнай судьбу на день',
+                input_message_content: {
+                    message_text: `Предсказание для @${from.username}:\n\n${portent}`,
+                },
+            }],
+            cache_time: 300,
+            is_personal: true,
+        });
     });
+    if (requestMap.get(from.id)) {
+        return;
+    }
+    const promise = fetchPortent();
+    promise
+        .then((portent) => {
+            console.log(`Response to update`, update.inline_query);
+            callbackMap.get(from.id)?.(portent);
+        })
+        .catch((error) => {
+            console.error(`Failed request to YAGTP`, error);
+            callbackMap.get(from.id)?.(`Сегодня по звездам ничего не видно для тебя, один срак впереди`);
+        })
+        .finally(() => {
+            requestMap.delete(from.id);
+            callbackMap.delete(from.id);
+        });
+    requestMap.set(from.id, promise);
 });
 
 tgbot.watch(['inline_query']);
